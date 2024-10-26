@@ -6,8 +6,16 @@ from datetime import datetime
 import json
 import os
 import sqlite3
+import requests
+from requests.exceptions import RequestException, Timeout, ConnectionError
+import logging
 
-TOKEN = '8130043712:AAEGzwpVVDWAkRWq4a5Ga-ljRi2xVjp14tU'
+# Настройка логирования
+logging.basicConfig(filename='bot_log.txt', level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+
+TOKEN = '6722867524:AAHTrbPaoI_5FfCx3gRfvi7LmUY9gyHu2FY'
 ADMIN_ID = 5029226185
 bot = telebot.TeleBot(TOKEN)
 
@@ -599,22 +607,40 @@ def process_event_date(message, event):
 
 # Функция для проверки приближающихся мероприятий и отправки уведомлений
 def check_upcoming_events():
+    sent_notifications = {}
+    
     while True:
         current_date = datetime.now().date()
+        events = load_events()
+        
         for event in events:
+            event_id = event['id']
             event_date = event['date'].date()
             days_until_event = (event_date - current_date).days
             
-            if days_until_event == 30:
-                notify_all_users(f"🗓️ До мероприятия '{event['name']}' остался 1 месяц!")
-            elif days_until_event in [10, 5, 4, 3, 2]:
-                notify_all_users(f"🗓️ До мероприятия '{event['name']}' осталось {days_until_event} дней!")
-            elif days_until_event == 1:
-                notify_all_users(f"⏰ Мероприятие '{event['name']}' состоится завтра!")
-            elif days_until_event == 0:
-                notify_all_users(f"🎉 Мероприятие '{event['name']}' проходит сегодня!")
+            if event_id not in sent_notifications:
+                sent_notifications[event_id] = set()
+            
+            notifications = [
+                (30, '1month', f"🗓️ До мероприятия '{event['name']}' остался 1 месяц!"),
+                (10, '10days', f"🗓️ До мероприятия '{event['name']}' осталось 10 дней!"),
+                (5, '5days', f"🗓️ До мероприятия '{event['name']}' осталось 5 дней!"),
+                (3, '3days', f"🗓️ До мероприятия '{event['name']}' осталось 3 дня!"),
+                (2, '2days', f"🗓️ До мероприятия '{event['name']}' осталось 2 дня!"),
+                (1, '1day', f"⏰ Мероприятие '{event['name']}' состоится завтра!"),
+                (0, 'today', f"🎉 Мероприятие '{event['name']}' проходит сегодня!")
+            ]
+            
+            for days, notification_type, message in notifications:
+                if (days_until_event == days and 
+                    notification_type not in sent_notifications[event_id]):
+                    notify_all_users(message)
+                    sent_notifications[event_id].add(notification_type)
+            
+            if days_until_event < 0:
+                if event_id in sent_notifications:
+                    del sent_notifications[event_id]
         
-        # Проверка каждый час
         time.sleep(3600)
 
 # Модифицируем функцию process_event_description
@@ -694,6 +720,23 @@ def handle_all_messages(message):
         bot.reply_to(message, "Пожалуйста, выберите опцию из меню.", reply_markup=main_menu_markup())
 
 
+# Увеличиваем тайм-аут для запросов
+bot.request_timeout = 60
+
+# Остальной код остается без изменений
+# ...
+
+def run_bot():
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=60)
+        except RequestException as e:
+            logging.error(f"Network error occurred: {e}")
+            time.sleep(15)
+        except Exception as e:
+            logging.error(f"Critical error occurred: {e}")
+            time.sleep(60)
+
 if __name__ == '__main__':
     load_questions()
     load_users()
@@ -705,4 +748,13 @@ if __name__ == '__main__':
     reminder_thread.daemon = True
     reminder_thread.start()
     
-    bot.polling(none_stop=True)
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.start()
+
+    # Основной цикл для поддержания работы программы
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        print("Bot stopped")
